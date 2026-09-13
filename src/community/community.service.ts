@@ -1329,26 +1329,40 @@ Analyze the post. Respond ONLY with a JSON object in the following format:
     const normEmail = this.normalizeUserKey(userEmail);
     const userKeys = [userId, userEmail, normUser, normEmail].filter((k): k is string => Boolean(k && k.length > 0));
 
-    // Collect in-memory messages from this conversationId and any matching alias keys
+    const clean = conversationId.replace(/^conv_/, '');
+    const parts = clean.split('__');
+    const p0 = parts[0] || '';
+    const p1 = parts[1] || '';
+
+    // Collect in-memory messages from this conversationId and ANY matching alias keys
     const memMsgsList: any[] = [];
     CommunityService.inMemoryDirectMessages.forEach((msgs, cId) => {
-      if (cId === conversationId) {
+      const cClean = cId.replace(/^conv_/, '');
+      const cParts = cClean.split('__');
+      const isMatch = (cId === conversationId) ||
+        (cParts.length === 2 && (
+          (this.isSameUser(cParts[0], p0) && this.isSameUser(cParts[1], p1)) ||
+          (this.isSameUser(cParts[0], p1) && this.isSameUser(cParts[1], p0))
+        ));
+
+      if (isMatch) {
         memMsgsList.push(...msgs);
       } else {
-        const clean1 = conversationId.replace(/^conv_/, '');
-        const clean2 = cId.replace(/^conv_/, '');
-        if (clean1 === clean2) {
-          memMsgsList.push(...msgs);
+        // Also check if individual messages inside match participants
+        for (const m of msgs) {
+          const s = m.senderEmail || m.senderId || '';
+          const r = m.recipientEmail || m.recipientId || '';
+          if ((this.isSameUser(s, p0) && this.isSameUser(r, p1)) || (this.isSameUser(s, p1) && this.isSameUser(r, p0))) {
+            memMsgsList.push(m);
+          }
         }
       }
     });
 
     try {
-      const clean = conversationId.replace(/^conv_/, '');
-      const parts = clean.split('__');
       let query = this.db.from('DirectMessage').select('*');
-      if (parts.length === 2 && parts[0] && parts[1]) {
-        query = query.or(`conversationId.eq.${conversationId},conversationId.eq.conv_${parts[1]}__${parts[0]},and(senderId.ilike.%${parts[0]}%,recipientId.ilike.%${parts[1]}%),and(senderId.ilike.%${parts[1]}%,recipientId.ilike.%${parts[0]}%)`);
+      if (p0 && p1) {
+        query = query.or(`conversationId.eq.${conversationId},conversationId.eq.conv_${p1}__${p0},and(senderId.ilike.%${p0}%,recipientId.ilike.%${p1}%),and(senderId.ilike.%${p1}%,recipientId.ilike.%${p0}%),and(senderEmail.ilike.%${p0}%,recipientEmail.ilike.%${p1}%),and(senderEmail.ilike.%${p1}%,recipientEmail.ilike.%${p0}%)`);
       } else {
         query = query.eq('conversationId', conversationId);
       }
@@ -1356,9 +1370,17 @@ Analyze the post. Respond ONLY with a JSON object in the following format:
 
       const msgMap = new Map<string, any>();
       if (dbMsgs && dbMsgs.length > 0) {
-        dbMsgs.forEach((m: any) => msgMap.set(m.id || `${m.senderId}_${m.content}_${m.createdAt}`, m));
+        dbMsgs.forEach((m: any) => {
+          const key = m.id || `${m.senderId}_${m.content || m.text}_${m.createdAt || m.timestamp}`;
+          msgMap.set(key, m);
+        });
       }
-      memMsgsList.forEach((m: any) => msgMap.set(m.id || `${m.senderId}_${m.content || m.text}_${m.createdAt || m.timestamp}`, m));
+      memMsgsList.forEach((m: any) => {
+        const key = m.id || `${m.senderId}_${m.content || m.text}_${m.createdAt || m.timestamp}`;
+        if (!msgMap.has(key)) {
+          msgMap.set(key, m);
+        }
+      });
 
       const formatted = Array.from(msgMap.values()).map((m: any) => {
         const rawContent = m.content || m.text || '';
@@ -1382,8 +1404,24 @@ Analyze the post. Respond ONLY with a JSON object in the following format:
         };
       });
 
-      formatted.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
-      return { success: true, data: formatted };
+      // Deduplicate messages with identical sender, text, and timestamp proximity
+      const uniqueFormatted: any[] = [];
+      for (const m of formatted) {
+        const exists = uniqueFormatted.some(ex => {
+          if (m.id && ex.id && m.id === ex.id) return true;
+          const sameSender = m.senderId === ex.senderId || m.senderEmail === ex.senderEmail;
+          const sameText = m.text === ex.text;
+          const t1 = new Date(m.timestamp).getTime();
+          const t2 = new Date(ex.timestamp).getTime();
+          return sameSender && sameText && Math.abs(t1 - t2) < 15000;
+        });
+        if (!exists) {
+          uniqueFormatted.push(m);
+        }
+      }
+
+      uniqueFormatted.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+      return { success: true, data: uniqueFormatted };
     } catch (e) {
       console.error('[CommunityService] getDirectMessages fallback to memory:', e);
       const formatted = memMsgsList.map((m: any) => {
