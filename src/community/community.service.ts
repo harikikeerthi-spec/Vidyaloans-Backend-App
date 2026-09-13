@@ -1344,11 +1344,15 @@ Analyze the post. Respond ONLY with a JSON object in the following format:
     });
 
     try {
-      const { data: dbMsgs } = await this.db
-        .from('DirectMessage')
-        .select('*')
-        .eq('conversationId', conversationId)
-        .order('createdAt', { ascending: true });
+      const clean = conversationId.replace(/^conv_/, '');
+      const parts = clean.split('__');
+      let query = this.db.from('DirectMessage').select('*');
+      if (parts.length === 2 && parts[0] && parts[1]) {
+        query = query.or(`conversationId.eq.${conversationId},conversationId.eq.conv_${parts[1]}__${parts[0]},and(senderId.ilike.%${parts[0]}%,recipientId.ilike.%${parts[1]}%),and(senderId.ilike.%${parts[1]}%,recipientId.ilike.%${parts[0]}%)`);
+      } else {
+        query = query.eq('conversationId', conversationId);
+      }
+      const { data: dbMsgs } = await query.order('createdAt', { ascending: true });
 
       const msgMap = new Map<string, any>();
       if (dbMsgs && dbMsgs.length > 0) {
