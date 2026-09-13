@@ -832,6 +832,28 @@ export class CommunityController {
         return this.communityService.createForumPost(req.user.id, body);
     }
 
+    @Get('forum/posts/:id/comments')
+    @Get('posts/:id/comments')
+    @Get('forum/:id/comments')
+    async getForumComments(@Param('id') id: string, @Request() req) {
+        let userId: string | undefined;
+        try {
+            const authHeader = req.headers.authorization;
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                const token = authHeader.split(' ')[1];
+                const decoded = this.jwtService.decode(token) as any;
+                if (decoded && decoded.id) {
+                    userId = decoded.id;
+                }
+            }
+        } catch (e) { }
+        const postData = await this.communityService.getForumPostById(id, userId);
+        return {
+            success: true,
+            data: postData.data?.comments || []
+        };
+    }
+
     @Post('forum/:id/comment')
     @Post('forum/:id/comments')
     @Post('forum/posts/:id/comments')
