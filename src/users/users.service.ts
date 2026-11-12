@@ -92,6 +92,96 @@ export class UsersService {
     return data;
   }
 
+  async ensureReviewerProfileAndData(email: string) {
+    if (email.toLowerCase().trim() !== 'reviewer@vidyaloans.in') return;
+
+    try {
+      const existing = await this.findOne(email);
+      let userId: string;
+
+      if (!existing) {
+        const created = await this.create({
+          email: 'reviewer@vidyaloans.in',
+          firstName: 'Google',
+          lastName: 'Reviewer',
+          phoneNumber: '+919876543210',
+          role: 'user',
+        });
+        userId = created.id;
+      } else {
+        userId = existing.id;
+      }
+
+      // Ensure profile details are complete
+      await this.db.from('User').update({
+        firstName: 'Google',
+        lastName: 'Reviewer',
+        phoneNumber: '+919876543210',
+        mobile: '+919876543210',
+        dateOfBirth: '1998-05-15',
+        documentVerified: true,
+        goal: 'Master of Science in Computer Science',
+        studyDestination: 'United States',
+        targetUniversity: 'Rochester Institute of Technology (RIT)',
+        courseName: 'MS in Computer Science',
+        intakeSeason: 'Fall 2026',
+        bachelorsDegree: 'B.Tech in Computer Science',
+        gpa: 3.8,
+        workExp: 2,
+        entranceTest: 'GRE',
+        entranceScore: '320',
+        updatedAt: new Date().toISOString()
+      }).eq('id', userId);
+
+      // Check if sample loan application exists
+      const { data: existingApps } = await this.db.from('LoanApplication').select('id').eq('userId', userId);
+      if (!existingApps || existingApps.length === 0) {
+        await this.db.from('LoanApplication').insert({
+          id: randomUUID(),
+          applicationNumber: `APP-${Date.now().toString().slice(-6)}`,
+          userId,
+          bank: 'Avanse Financial Services',
+          loanType: 'Unsecured Education Loan',
+          amount: 3500000,
+          tenure: 120,
+          interestRate: 10.5,
+          processingFee: 15000,
+          purpose: 'Higher Education Tuition and Living Expenses',
+          firstName: 'Google',
+          lastName: 'Reviewer',
+          email: 'reviewer@vidyaloans.in',
+          phone: '+919876543210',
+          dateOfBirth: '1998-05-15',
+          gender: 'Male',
+          nationality: 'Indian',
+          address: '42 Knowledge Park',
+          city: 'Hyderabad',
+          state: 'Telangana',
+          pincode: '500081',
+          country: 'India',
+          employmentType: 'Salaried',
+          universityName: 'Rochester Institute of Technology (RIT)',
+          courseName: 'MS in Computer Science',
+          courseDuration: 24,
+          admissionStatus: 'Admitted',
+          hasCoApplicant: true,
+          coApplicantName: 'Ramesh Sharma',
+          coApplicantRelation: 'Father',
+          coApplicantPhone: '+919876543211',
+          coApplicantIncome: 1200000,
+          status: 'in_review',
+          stage: 'document_verification',
+          progress: 45,
+          date: new Date().toISOString(),
+          submittedAt: new Date(Date.now() - 3 * 86400000).toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+      }
+    } catch (err) {
+      console.error('[UsersService.ensureReviewerProfileAndData] Error:', err);
+    }
+  }
+
   async findByMobile(mobile: string) {
     const cleanMobile = mobile.replace(/\D/g, '');
     const cleanMobileNoCountry =

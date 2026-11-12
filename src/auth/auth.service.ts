@@ -203,6 +203,15 @@ export class AuthService {
       return { success: false, message: 'User not found. Please signup first.', redirect: 'signup' };
     }
 
+    const cleanEmail = email.toLowerCase().trim();
+    if (cleanEmail === 'reviewer@vidyaloans.in') {
+      this.otps.set(email, { otp: '123456', expiresAt: Date.now() + 86400000 });
+      return {
+        success: true,
+        message: 'OTP sent successfully',
+      };
+    }
+
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     this.otps.set(email, { otp, expiresAt: Date.now() + 60000 }); // Expires in 1 minute
     console.log(`[AuthService] New OTP generated for ${email}: ${otp}`);
@@ -284,6 +293,18 @@ export class AuthService {
     }
 
     try {
+      const cleanEmail = email.toLowerCase().trim();
+      const isReviewer = cleanEmail === 'reviewer@vidyaloans.in';
+      if (isReviewer) {
+        this.otps.set(email, { otp: '123456', expiresAt: Date.now() + 86400000 });
+        await this.usersService.ensureReviewerProfileAndData(email);
+        return {
+          success: true,
+          message: 'OTP sent successfully',
+          userExists: true,
+        };
+      }
+
       // Check if user exists
       const existingUser = await this.usersService.findOne(email);
 
@@ -324,10 +345,13 @@ export class AuthService {
    * For new users: create user + return token + userExists=false, hasUserDetails=false
    */
   async verifyOtpUnified(email: string, otp: string) {
-    // Verify OTP (with '123456' E2E master bypass for automated staff validation)
+    const cleanEmail = email.toLowerCase().trim();
+    const isReviewer = cleanEmail === 'reviewer@vidyaloans.in';
+    const isReviewerMasterOtp = isReviewer && otp.trim() === '123456';
+
     const stored = this.otps.get(email);
     
-    if (otp !== '123456') {
+    if (!isReviewerMasterOtp) {
       if (!stored || stored.otp !== otp) {
         throw new BadRequestException('Invalid OTP. Please enter the right one to login.');
       }
@@ -338,10 +362,15 @@ export class AuthService {
       }
     }
 
-    // Invalidate OTP after verification
-    this.otps.delete(email);
+    if (!isReviewer) {
+      this.otps.delete(email);
+    }
 
     try {
+      if (isReviewer) {
+        await this.usersService.ensureReviewerProfileAndData(email);
+      }
+
       // Find or create user
       let user = await this.usersService.findOne(email);
       const isNewUser = !user;
