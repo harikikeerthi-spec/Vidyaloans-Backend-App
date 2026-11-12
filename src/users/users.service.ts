@@ -104,7 +104,7 @@ export class UsersService {
           email: 'reviewer@vidyaloans.in',
           firstName: 'Google',
           lastName: 'Reviewer',
-          phoneNumber: '+919876543210',
+          phoneNumber: '9876543210',
           role: 'user',
         });
         userId = created.id;
@@ -116,8 +116,8 @@ export class UsersService {
       await this.db.from('User').update({
         firstName: 'Google',
         lastName: 'Reviewer',
-        phoneNumber: '+919876543210',
-        mobile: '+919876543210',
+        phoneNumber: '9876543210',
+        mobile: '9876543210',
         dateOfBirth: '1998-05-15',
         documentVerified: true,
         goal: 'Master of Science in Computer Science',
