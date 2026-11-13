@@ -825,7 +825,6 @@ export class BankDashboardService {
       'avanse': 'avanse',
       'auxilo finserve': 'auxilo',
       'auxilo': 'auxilo',
-      'incred': 'incred',
       'sbi': 'sbi',
       'icici': 'icici',
       'axis': 'axis',
