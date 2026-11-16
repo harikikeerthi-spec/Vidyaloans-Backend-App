@@ -1306,6 +1306,24 @@ export class ApplicationService {
           } else if (data.status === 'submitted_to_bank') {
             await this.emailService.sendApplicationSentToBankEmail(email, userName, bankName, latestApp);
           }
+
+          // Emit application stage updated event for mobile push notifications
+          if (data.status || data.stage) {
+            this.eventEmitter.emit('application.stage.updated', {
+              applicationId,
+              applicationNumber: latestApp.applicationNumber || application.applicationNumber,
+              userId: latestApp.userId || application.userId,
+              candidateEmail: email,
+              candidateName: userName,
+              bankName,
+              fromStatus: application.status,
+              toStatus: data.status || application.status,
+              fromStage: application.stage,
+              toStage: data.stage || application.stage,
+              progress: updateData.progress ?? application.progress,
+              remarks: data.remarks || data.rejectionReason,
+            });
+          }
         }
       }
     } catch (err) {

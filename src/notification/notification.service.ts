@@ -392,6 +392,61 @@ export class NotificationService {
   }
 
   /**
+   * Event listener for application stage & status updates from staff portal.
+   * Dispatches native FCM push notifications and in-app alerts at each step:
+   * Applied -> Documents verified -> Sent to bank -> Sanctioned -> Disbursed
+   */
+  @OnEvent('application.stage.updated')
+  async handleApplicationStageUpdated(payload: any) {
+    try {
+      const targetUserId = payload.userId || payload.candidateEmail;
+      if (!targetUserId) return;
+
+      const appNum = payload.applicationNumber || 'N/A';
+      const bank = payload.bankName || 'Partner Bank';
+
+      let title = '';
+      let body = '';
+      const type = 'application_status_update';
+
+      const toStage = (payload.toStage || '').toLowerCase();
+      const toStatus = (payload.toStatus || '').toLowerCase();
+
+      if (toStatus === 'disbursed' || toStatus === 'disbursement_confirmed' || toStage === 'disbursement') {
+        title = '💸 Loan Disbursed!';
+        body = `Great news! Loan application #${appNum} funds have been successfully disbursed.`;
+      } else if (toStatus === 'approved' || toStatus === 'sanctioned' || toStage === 'sanction') {
+        title = '🎉 Loan Sanctioned!';
+        body = `Congratulations! Your loan application #${appNum} has been sanctioned by ${bank}.`;
+      } else if (toStatus === 'submitted_to_bank' || toStage === 'bank_review' || toStage === 'credit_check') {
+        title = '🏦 Application Sent to Bank';
+        body = `Your loan application #${appNum} has been forwarded to ${bank} for credit review.`;
+      } else if (toStage === 'document_verification' || toStage === 'documents_verified' || (toStatus === 'processing' && toStage !== 'bank_review')) {
+        title = '📄 Documents Verified';
+        body = `Your documents for loan application #${appNum} have been reviewed and verified. Next step: bank submission.`;
+      } else if (toStatus === 'rejected') {
+        title = '⚠️ Application Status Update';
+        body = `Your loan application #${appNum} has an update: ${payload.remarks || 'Application rejected'}. Please review in the app.`;
+      } else if (toStatus === 'submitted' || toStage === 'application_submitted') {
+        title = '🚀 Application Under Review';
+        body = `Your loan application #${appNum} has moved to review stage.`;
+      }
+
+      if (title && body) {
+        await this.createNotification(targetUserId, title, body, type, {
+          applicationId: payload.applicationId,
+          applicationNumber: payload.applicationNumber,
+          toStatus: payload.toStatus,
+          toStage: payload.toStage,
+          progress: payload.progress,
+        });
+      }
+    } catch (error) {
+      this.logger.error(`Failed to handle application stage updated event: ${error.message}`);
+    }
+  }
+
+  /**
    * Event listener for document upload
    * Creates a confirmation notification strictly for the applicant
    */
