@@ -1277,6 +1277,28 @@ export class CommunityController {
         } catch (_) {}
         return this.communityService.deletePoll(id, userEmail, userRole);
     }
+
+    // ==================== UGC MODERATION: REPORT & BLOCK ====================
+
+    @Post('report')
+    async submitReport(@Body() body: any) {
+        return this.communityService.submitReport(body);
+    }
+
+    @Get('reports')
+    async getReports(@Query('status') status?: string) {
+        return this.communityService.getReports(status);
+    }
+
+    @Post('block')
+    async blockUser(@Body() body: any) {
+        return this.communityService.blockUser(body?.userId, body?.blockedUserId);
+    }
+
+    @Get('blocked/:userId')
+    async getBlockedUsers(@Param('userId') userId: string) {
+        return this.communityService.getBlockedUsers(userId);
+    }
 }
 
 
