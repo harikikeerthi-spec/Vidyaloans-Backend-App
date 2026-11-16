@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Get, Param, Delete } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Delete, HttpCode, HttpStatus } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { ReferralService } from '../referral/referral.service';
@@ -87,6 +87,7 @@ export class AuthController {
    * @returns Internal JWT tokens and user profile
    */
   @Post('firebase')
+  @HttpCode(HttpStatus.OK)
   async firebaseLogin(@Body() body: { idToken: string }) {
     if (!body || !body.idToken) {
       return {
@@ -104,14 +105,16 @@ export class AuthController {
    * @returns { success: boolean, access_token: string, refresh_token: string, message: string }
    */
   @Post('refresh')
-  async refreshToken(@Body() body: { refresh_token: string }) {
-    if (!body || !body.refresh_token) {
+  @HttpCode(HttpStatus.OK)
+  async refreshToken(@Body() body: { refresh_token?: string; refreshToken?: string }) {
+    const token = body?.refresh_token || body?.refreshToken;
+    if (!token) {
       return {
         success: false,
         message: 'Refresh token is required',
       };
     }
-    return this.authService.refreshTokens(body.refresh_token);
+    return this.authService.refreshTokens(token);
   }
 
   /**
