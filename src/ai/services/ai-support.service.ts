@@ -12,7 +12,7 @@ export class AiSupportService {
 
 Key Information about VidhyaLoan:
 - Education Loan Aggregator & Platform: We partner with leading financial institutions and NBFCs including HDFC Credila, Avanse Financial Services, Auxilo Finserve, IDFC FIRST Bank, and Poonawalla Fincorp.
-- Rates: Starting from 8.5% p.a. for secured loans and 9.75%–11.5% for unsecured loans.
+- Rates: Starting from 8.5% p.a. for secured loans and 10.25%–11.5% for unsecured loans.
 - Loan Amounts: Up to ₹75 Lakhs+ without collateral (unsecured) and ₹1.5+ Crores with collateral (secured).
 - Covered Destinations: USA, UK, Canada, Germany, Australia, Ireland, Europe, and India.
 - Services: 100% free loan assistance, rapid sanction letter for visa filing, and expert counselors.
@@ -54,7 +54,7 @@ Tone & Guidelines:
       return "Required documents for an education loan typically include:\n• Student KYC: Passport, Aadhaar, PAN card\n• Academic proof: 10th, 12th, Degree transcripts & entrance exam scores (GRE/IELTS/TOEFL)\n• University Admission: Official admit letter & fee structure\n• Co-applicant: Income proof (salary slips / ITR) and 6 months bank statements.";
     }
     if (lower.includes('interest') || lower.includes('rate') || lower.includes('roi')) {
-      return "Education loan interest rates on VidhyaLoan start from 8.5% p.a. for secured loans (with property/FD collateral) and 9.75% to 11.5% for unsecured loans (without collateral), depending on your academic profile and choice of country.";
+      return "Education loan interest rates on VidhyaLoan start from 8.5% p.a. for secured loans (with property/FD collateral) and 10.25% to 11.5% for unsecured loans (without collateral), depending on your academic profile and choice of country.";
     }
     if (lower.includes('collateral') || lower.includes('unsecured')) {
       return "VidhyaLoan provides non-collateral (unsecured) loans up to ₹75 Lakhs for premier global universities. For higher amounts up to ₹1.5+ Crores, secured loans backed by residential or commercial property or fixed deposits are available at lower rates.";
