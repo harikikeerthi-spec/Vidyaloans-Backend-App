@@ -105,6 +105,11 @@ export class NotificationController {
     return { success: true, data: result };
   }
 
+  @Get('launch-alert')
+  async getLaunchAlertStatus() {
+    return { success: true, message: 'Launch alert registration service active' };
+  }
+
   @Post('launch-alert')
   async subscribeLaunchAlert(@Body() body: any, @Req() req: any) {
     const email = (body.email || '').trim();

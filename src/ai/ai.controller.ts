@@ -440,6 +440,11 @@ export class AiController {
     }
   }
 
+  @Get('university/favorite')
+  async getFavoriteStatus() {
+    return { success: true, message: 'University favorite endpoint active' };
+  }
+
   @Post('university/favorite')
   async favoriteUniversity(
     @Body()
