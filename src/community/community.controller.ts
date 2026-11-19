@@ -1290,9 +1290,36 @@ export class CommunityController {
         return this.communityService.getReports(status);
     }
 
+    @Post('reports/:id/action')
+    async takeReportAction(
+        @Param('id') id: string,
+        @Body() body: { action: string; reviewer?: string; notes?: string }
+    ) {
+        return this.communityService.takeReportAction(id, body.action, body.reviewer, body.notes);
+    }
+
+    @Patch('reports/:id')
+    async patchReport(
+        @Param('id') id: string,
+        @Body() body: { action?: string; status?: string; reviewer?: string; notes?: string }
+    ) {
+        const action = body.action || body.status || 'RESOLVE';
+        return this.communityService.takeReportAction(id, action, body.reviewer, body.notes);
+    }
+
+    @Delete('reports/:id')
+    async deleteReport(@Param('id') id: string) {
+        return this.communityService.deleteReport(id);
+    }
+
     @Post('block')
     async blockUser(@Body() body: any) {
         return this.communityService.blockUser(body?.userId, body?.blockedUserId);
+    }
+
+    @Post('unblock')
+    async unblockUser(@Body() body: any) {
+        return this.communityService.unblockUser(body?.userId, body?.blockedUserId);
     }
 
     @Get('blocked/:userId')

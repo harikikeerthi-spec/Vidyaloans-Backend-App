@@ -404,26 +404,44 @@ export class CommunityService {
     if (offset) query = query.range(offset, offset + (limit || 20) - 1);
 
     const { data: posts, count } = await query;
+    let postsList: any[] = posts || [];
+
+    // Filter out posts from users blocked by userId
+    if (userId && postsList.length > 0) {
+      try {
+        const blocked = await this.getBlockedUsers(userId);
+        if (blocked && blocked.length > 0) {
+          const blockedSet = new Set(blocked.map((b: string) => b.toLowerCase().trim()));
+          postsList = postsList.filter((p: any) => {
+            const aId = (p.authorId || '').toLowerCase().trim();
+            const aEmail = (p.authorEmail || p.author?.email || '').toLowerCase().trim();
+            return !blockedSet.has(aId) && !blockedSet.has(aEmail);
+          });
+        }
+      } catch (err) {
+        console.warn('[CommunityService] Filtering blocked users for getForumPosts failed:', err);
+      }
+    }
 
     // Check which posts are liked by the userId
     let likedPostIds = new Set<string>();
-    if (userId && posts && posts.length > 0) {
+    if (userId && postsList.length > 0) {
       const { data: likedPosts } = await this.db
         .from('PostLike')
         .select('postId')
         .eq('userId', userId)
-        .in('postId', posts.map((p: any) => p.id));
+        .in('postId', postsList.map((p: any) => p.id));
       likedPostIds = new Set((likedPosts || []).map((l: any) => l.postId));
     }
 
     return {
       success: true,
-      data: (posts || []).map((post: any) => ({
+      data: postsList.map((post: any) => ({
         ...post,
         commentCount: Array.isArray(post.commentCount) ? (post.commentCount[0]?.count ?? 0) : (post.commentCount || 0),
         liked: likedPostIds.has(post.id),
       })),
-      pagination: { total: count || 0, limit, offset, hasMore: (offset || 0) + (posts?.length || 0) < (count || 0) },
+      pagination: { total: count || 0, limit, offset, hasMore: (offset || 0) + (postsList.length) < (count || 0) },
     };
   }
 
@@ -508,6 +526,21 @@ export class CommunityService {
       }
 
       if (rawComments && rawComments.length > 0) {
+        if (userId) {
+          try {
+            const blocked = await this.getBlockedUsers(userId);
+            if (blocked && blocked.length > 0) {
+              const blockedSet = new Set(blocked.map((b: string) => b.toLowerCase().trim()));
+              rawComments = rawComments.filter((c: any) => {
+                const aId = (c.authorId || '').toLowerCase().trim();
+                const aEmail = (c.authorEmail || c.author?.email || '').toLowerCase().trim();
+                return !blockedSet.has(aId) && !blockedSet.has(aEmail);
+              });
+            }
+          } catch (err) {
+            console.warn('[CommunityService] Filtering blocked comments failed:', err);
+          }
+        }
         totalCommentCount = rawComments.length;
         if (userId) {
           try {
@@ -2433,33 +2466,57 @@ Analyze the post. Respond ONLY with a JSON object in the following format:
   }) {
     const reportItem = {
       id: `rep_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      contentId: data.contentId,
-      contentType: data.contentType,
+      contentId: data.contentId || '',
+      contentType: (data.contentType || 'POST').toUpperCase(),
       reportedUserId: data.reportedUserId || '',
       reportedUserEmail: data.reportedUserEmail || '',
-      reason: data.reason,
+      reason: data.reason || 'Inappropriate content',
       note: data.note || '',
       reporterEmail: data.reporterEmail || '',
       status: 'PENDING',
+      actionTaken: null,
+      reviewedBy: null,
+      reviewedAt: null,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
     CommunityService.reportsQueue.unshift(reportItem);
 
     try {
       await this.db.from('ContentReport').insert([reportItem]);
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[CommunityService] DB insert ContentReport fallback to memory:', err);
+    }
 
     return {
       success: true,
       message: 'Report submitted successfully. Our safety team reviews all reports within 24 hours.',
       reportId: reportItem.id,
+      report: reportItem,
     };
   }
 
   async getReports(status?: string) {
+    try {
+      let query = this.db.from('ContentReport').select('*').order('createdAt', { ascending: false });
+      if (status && status !== 'all') {
+        query = query.ilike('status', status);
+      }
+      const { data, error } = await query;
+      if (!error && data) {
+        return {
+          success: true,
+          data,
+          count: data.length,
+        };
+      }
+    } catch (err) {
+      console.warn('[CommunityService] DB getReports failed, falling back to memory queue:', err);
+    }
+
     let list = CommunityService.reportsQueue;
-    if (status) {
+    if (status && status !== 'all') {
       list = list.filter((r) => r.status.toUpperCase() === status.toUpperCase());
     }
     return {
@@ -2470,17 +2527,160 @@ Analyze the post. Respond ONLY with a JSON object in the following format:
   }
 
   async blockUser(userId: string, blockedUserId: string) {
-    if (!userId || !blockedUserId) return { success: false, message: 'User IDs required' };
-    if (!CommunityService.blockedUsersMap.has(userId)) {
-      CommunityService.blockedUsersMap.set(userId, new Set());
+    if (!userId || !blockedUserId) {
+      return { success: false, message: 'Both userId and blockedUserId are required' };
     }
-    CommunityService.blockedUsersMap.get(userId)!.add(blockedUserId);
+    const cleanUserId = userId.toLowerCase().trim();
+    const cleanBlockedId = blockedUserId.toLowerCase().trim();
+
+    if (!CommunityService.blockedUsersMap.has(cleanUserId)) {
+      CommunityService.blockedUsersMap.set(cleanUserId, new Set());
+    }
+    CommunityService.blockedUsersMap.get(cleanUserId)!.add(cleanBlockedId);
+
+    try {
+      const blockId = `blk_${cleanUserId}_${cleanBlockedId}`.replace(/[^a-zA-Z0-9_]/g, '_');
+      await this.db.from('BlockedUser').upsert([
+        {
+          id: blockId,
+          userId: cleanUserId,
+          blockedUserId: cleanBlockedId,
+          createdAt: new Date().toISOString(),
+        }
+      ], { onConflict: 'userId,blockedUserId' });
+    } catch (err) {
+      console.warn('[CommunityService] DB upsert BlockedUser fallback to memory:', err);
+    }
+
     return { success: true, message: 'User blocked successfully' };
   }
 
-  async getBlockedUsers(userId: string) {
-    const set = CommunityService.blockedUsersMap.get(userId) || new Set();
-    return { success: true, blockedUserIds: Array.from(set) };
+  async unblockUser(userId: string, blockedUserId: string) {
+    if (!userId || !blockedUserId) {
+      return { success: false, message: 'Both userId and blockedUserId are required' };
+    }
+    const cleanUserId = userId.toLowerCase().trim();
+    const cleanBlockedId = blockedUserId.toLowerCase().trim();
+
+    if (CommunityService.blockedUsersMap.has(cleanUserId)) {
+      CommunityService.blockedUsersMap.get(cleanUserId)!.delete(cleanBlockedId);
+    }
+
+    try {
+      await this.db
+        .from('BlockedUser')
+        .delete()
+        .eq('userId', cleanUserId)
+        .eq('blockedUserId', cleanBlockedId);
+    } catch (_) {}
+
+    return { success: true, message: 'User unblocked successfully' };
+  }
+
+  async getBlockedUsers(userId: string): Promise<string[]> {
+    if (!userId) return [];
+    const cleanUserId = userId.toLowerCase().trim();
+    const inMem = CommunityService.blockedUsersMap.get(cleanUserId);
+    const result = new Set<string>(inMem ? Array.from(inMem) : []);
+
+    try {
+      const { data } = await this.db
+        .from('BlockedUser')
+        .select('blockedUserId')
+        .eq('userId', cleanUserId);
+      if (data && data.length > 0) {
+        data.forEach((row: any) => {
+          if (row.blockedUserId) {
+            result.add(row.blockedUserId.toLowerCase().trim());
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('[CommunityService] DB getBlockedUsers failed:', err);
+    }
+
+    return Array.from(result);
+  }
+
+  async takeReportAction(reportId: string, action: string, reviewer?: string, notes?: string) {
+    const normalizedAction = (action || '').toUpperCase().trim();
+    const validActions = ['REMOVE_CONTENT', 'DISMISS', 'RESOLVE'];
+    if (!validActions.includes(normalizedAction)) {
+      throw new BadRequestException(`Invalid action. Allowed: ${validActions.join(', ')}`);
+    }
+
+    // 1. Locate report
+    let report: any = null;
+    try {
+      const { data } = await this.db.from('ContentReport').select('*').eq('id', reportId).maybeSingle();
+      report = data;
+    } catch (_) {}
+
+    if (!report) {
+      report = CommunityService.reportsQueue.find((r) => r.id === reportId);
+    }
+
+    if (!report) {
+      throw new HttpException('Report not found', HttpStatus.NOT_FOUND);
+    }
+
+    // 2. If action is REMOVE_CONTENT, delete the content
+    let contentDeleted = false;
+    if (normalizedAction === 'REMOVE_CONTENT') {
+      const contentType = (report.contentType || '').toUpperCase();
+      try {
+        if (contentType === 'POST' || contentType === 'FORUM_POST') {
+          await this.db.from('ForumComment').delete().eq('postId', report.contentId);
+          await this.db.from('PostLike').delete().eq('postId', report.contentId);
+          await this.db.from('ForumPost').delete().eq('id', report.contentId);
+          contentDeleted = true;
+        } else if (contentType === 'COMMENT' || contentType === 'FORUM_COMMENT') {
+          await this.db.from('ForumCommentLike').delete().eq('commentId', report.contentId);
+          await this.db.from('ForumComment').delete().eq('id', report.contentId);
+          contentDeleted = true;
+        }
+      } catch (err) {
+        console.error('[CommunityService] Failed to delete reported content:', err);
+      }
+    }
+
+    // 3. Update report status
+    const status = normalizedAction === 'DISMISS' ? 'DISMISSED' : (normalizedAction === 'REMOVE_CONTENT' ? 'CONTENT_REMOVED' : 'RESOLVED');
+    const now = new Date().toISOString();
+    const updateData = {
+      status,
+      actionTaken: normalizedAction,
+      reviewedBy: reviewer || 'Staff Moderator',
+      reviewedAt: now,
+      updatedAt: now,
+      ...(notes ? { note: `${report.note ? report.note + '\n' : ''}Resolution: ${notes}` } : {})
+    };
+
+    try {
+      await this.db.from('ContentReport').update(updateData).eq('id', reportId);
+    } catch (_) {}
+
+    const memItem = CommunityService.reportsQueue.find((r) => r.id === reportId);
+    if (memItem) {
+      Object.assign(memItem, updateData);
+    }
+
+    return {
+      success: true,
+      message: normalizedAction === 'REMOVE_CONTENT'
+        ? 'Content removed and report resolved successfully.'
+        : `Report marked as ${status.toLowerCase()}.`,
+      contentDeleted,
+      report: { ...report, ...updateData },
+    };
+  }
+
+  async deleteReport(reportId: string) {
+    try {
+      await this.db.from('ContentReport').delete().eq('id', reportId);
+    } catch (_) {}
+    CommunityService.reportsQueue = CommunityService.reportsQueue.filter((r) => r.id !== reportId);
+    return { success: true, message: 'Report deleted successfully' };
   }
 }
 
