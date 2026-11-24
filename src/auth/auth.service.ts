@@ -530,7 +530,7 @@ export class AuthService {
       if (!user) {
         // Extract names from Firebase 'name' field if possible
         const nameParts = name ? name.split(' ') : [];
-        const firstName = nameParts[0] || (cleanPhone ? 'Student' : 'User');
+        const firstName = nameParts[0] || '';
         const lastName = nameParts.slice(1).join(' ') || '';
         const userEmail = email || `${cleanPhone}@phone.vidyaloans.in`;
 
