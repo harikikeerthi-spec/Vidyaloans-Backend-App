@@ -88,14 +88,14 @@ export class AuthController {
    */
   @Post('firebase')
   @HttpCode(HttpStatus.OK)
-  async firebaseLogin(@Body() body: { idToken: string }) {
+  async firebaseLogin(@Body() body: { idToken: string; phone?: string; email?: string }) {
     if (!body || !body.idToken) {
       return {
         success: false,
         message: 'Firebase ID Token is required',
       };
     }
-    return this.authService.authenticateFirebaseUser(body.idToken);
+    return this.authService.authenticateFirebaseUser(body.idToken, body.phone);
   }
 
   /**

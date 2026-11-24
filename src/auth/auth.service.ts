@@ -503,33 +503,65 @@ export class AuthService {
    * Handle Firebase Authentication
    * Verifies Firebase token, syncs user with DB, and returns internal JWT
    */
-  async authenticateFirebaseUser(idToken: string) {
+  async authenticateFirebaseUser(idToken: string, providedPhone?: string) {
     try {
       const decodedToken = await this.firebaseAuthService.verifyToken(idToken);
-      const { email, name, picture } = decodedToken;
+      const { email, name, picture } = decodedToken as any;
+      const rawPhone = (decodedToken as any).phone_number || providedPhone;
+      const cleanPhone = rawPhone ? rawPhone.replace(/\D/g, '').slice(-10) : null;
 
-      if (!email) {
-        throw new UnauthorizedException('Firebase token does not contain an email');
+      if (!email && !cleanPhone) {
+        throw new UnauthorizedException('Firebase token does not contain an email or phone number');
       }
 
-      // Find or create user
-      let user = await this.usersService.findOne(email);
+      // Reviewer shortcut: ensure reviewer profile exists in DB
+      if (cleanPhone === '9876543210' || (email && email.toLowerCase() === 'reviewer@vidyaloans.in')) {
+        await this.usersService.ensureReviewerProfileAndData('reviewer@vidyaloans.in');
+      }
+
+      // Find user by phone number first if available, otherwise by email
+      let user = cleanPhone ? await this.usersService.findByMobile(cleanPhone) : null;
+      if (!user && email) {
+        user = await this.usersService.findOne(email);
+      }
+
       const isNewUser = !user;
 
       if (!user) {
         // Extract names from Firebase 'name' field if possible
         const nameParts = name ? name.split(' ') : [];
-        const firstName = nameParts[0] || 'User';
+        const firstName = nameParts[0] || (cleanPhone ? 'Student' : 'User');
         const lastName = nameParts.slice(1).join(' ') || '';
+        const userEmail = email || `${cleanPhone}@phone.vidyaloans.in`;
 
         user = await this.usersService.create({
-          email,
+          email: userEmail,
           firstName,
           lastName,
+          phoneNumber: cleanPhone || undefined,
+          mobile: cleanPhone || undefined,
         });
-        console.log(`[AuthService] New Firebase user created: ${email}`);
+        console.log(`[AuthService] New Firebase user created: ${user.id} (${userEmail})`);
         
-        void this.emailService.sendWelcomeEmail(email, user.firstName ?? undefined);
+        if (email) {
+          void this.emailService.sendWelcomeEmail(email, user.firstName ?? undefined);
+        }
+      } else {
+        // If user already exists but doesn't have a phone number, backfill it
+        if (cleanPhone && (!user.phoneNumber || String(user.phoneNumber).trim() === '') && user.email) {
+          try {
+            await this.usersService.updateUserDetails(
+              user.email,
+              user.firstName || '',
+              user.lastName || '',
+              cleanPhone,
+              user.dateOfBirth ? String(user.dateOfBirth) : '',
+            );
+            user.phoneNumber = cleanPhone;
+          } catch (updateErr) {
+            console.warn('[AuthService] Could not backfill phone number:', updateErr);
+          }
+        }
       }
 
       const hasUserDetails = !!(user.firstName && user.lastName && user.phoneNumber && user.dateOfBirth);
@@ -539,7 +571,7 @@ export class AuthService {
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
-          phoneNumber: user.phoneNumber,
+          phoneNumber: user.phoneNumber || cleanPhone || '',
           isNewUser
       });
 
@@ -569,7 +601,7 @@ export class AuthService {
         hasUserDetails,
         firstName: user.firstName,
         lastName: user.lastName,
-        phoneNumber: user.phoneNumber || '',
+        phoneNumber: user.phoneNumber || cleanPhone || '',
         dateOfBirth: formattedDob || '',
         role: user.role,
         // NOTE: Google 'picture' is intentionally NOT returned.
