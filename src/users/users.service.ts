@@ -487,7 +487,13 @@ export class UsersService {
     dateOfBirth: string,
     profileImage?: string,
   ) {
-    const existing = await this.findOne(email);
+    let existing = await this.findOne(email);
+    if (!existing && phoneNumber) {
+      existing = await this.findByMobile(phoneNumber);
+    }
+    if (!existing) {
+      throw new BadRequestException('User not found with the provided details');
+    }
     const parsedDob = dateOfBirth ? this.parseDate(dateOfBirth) : null;
     const finalDob = (existing && existing.dateOfBirth) ? existing.dateOfBirth : parsedDob;
     const finalPhone = (existing && existing.phoneNumber && String(existing.phoneNumber).trim() !== '') 
@@ -512,11 +518,14 @@ export class UsersService {
     if (profileImage !== undefined) {
       updatePayload.profileImage = profileImage;
     }
+    if (email && (existing.email !== email || existing.email.includes('@phone.vidyaloans.in'))) {
+      updatePayload.email = email;
+    }
 
     const { data, error } = await this.db
       .from('User')
       .update(updatePayload)
-      .eq('email', email)
+      .eq('id', existing.id)
       .select()
       .single();
 

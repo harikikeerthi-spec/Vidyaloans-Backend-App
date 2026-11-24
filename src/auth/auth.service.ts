@@ -733,12 +733,15 @@ export class AuthService {
     dateOfBirth: string,
     profileImage?: string
   ) {
-    // First, check if user exists with the provided email
-    const existingUser = await this.usersService.findOne(email);
+    // Check if user exists with the provided email or phone number
+    let existingUser = await this.usersService.findOne(email);
+    if (!existingUser && phoneNumber) {
+      existingUser = await this.usersService.findByMobile(phoneNumber);
+    }
     if (!existingUser) {
       return {
         success: false,
-        message: 'User does not exist. Please check your email address or sign up first.'
+        message: 'User does not exist. Please check your details or sign up first.'
       };
     }
 
