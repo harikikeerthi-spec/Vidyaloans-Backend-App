@@ -183,11 +183,15 @@ export class UsersService {
   }
 
   async findByMobile(mobile: string) {
-    const cleanMobile = mobile.replace(/\D/g, '');
+    const cleanMobile = (mobile || '').replace(/\D/g, '');
     const cleanMobileNoCountry =
       cleanMobile.length > 10 && cleanMobile.startsWith('91')
-        ? cleanMobile.substring(2)
+        ? cleanMobile.slice(-10)
         : cleanMobile;
+
+    if (!cleanMobileNoCountry || cleanMobileNoCountry.length < 6) {
+      return null;
+    }
 
     const { data } = await this.db
       .from('User')
@@ -195,9 +199,27 @@ export class UsersService {
       .or(
         `mobile.eq.${mobile},phoneNumber.eq.${mobile},mobile.eq.${cleanMobileNoCountry},phoneNumber.eq.${cleanMobileNoCountry},mobile.ilike.%${cleanMobileNoCountry},phoneNumber.ilike.%${cleanMobileNoCountry}`,
       )
-      .limit(1)
-      .single();
-    return data;
+      .order('createdAt', { ascending: false })
+      .limit(10);
+
+    if (!data || data.length === 0) return null;
+    if (data.length === 1) return data[0];
+
+    // Prefer a row that already completed onboarding (has real email, name, and DOB)
+    const completed = data.find(
+      (u) =>
+        u.firstName &&
+        u.lastName &&
+        u.dateOfBirth &&
+        u.email &&
+        !String(u.email).includes('@phone.vidyaloans.in'),
+    );
+    if (completed) return completed;
+
+    const withRealEmail = data.find(
+      (u) => u.email && !String(u.email).includes('@phone.vidyaloans.in'),
+    );
+    return withRealEmail || data[0];
   }
 
   /**
@@ -486,19 +508,41 @@ export class UsersService {
     phoneNumber: string,
     dateOfBirth: string,
     profileImage?: string,
+    userId?: string,
   ) {
-    let existing = await this.findOne(email);
-    if (!existing && phoneNumber) {
-      existing = await this.findByMobile(phoneNumber);
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    const digitsPhone = (phoneNumber || '').replace(/\D/g, '');
+    const normalizedPhone =
+      digitsPhone.length > 10 && digitsPhone.startsWith('91')
+        ? digitsPhone.slice(-10)
+        : digitsPhone || phoneNumber;
+
+    let existing = userId ? await this.findById(userId) : null;
+    if (!existing && normalizedPhone) {
+      const mobileMatch = await this.findByMobile(normalizedPhone);
+      if (
+        mobileMatch &&
+        mobileMatch.email &&
+        String(mobileMatch.email).includes('@phone.vidyaloans.in')
+      ) {
+        existing = mobileMatch;
+      }
+    }
+    if (!existing && normalizedEmail) {
+      existing = await this.findOne(normalizedEmail);
+    }
+    if (!existing && normalizedPhone) {
+      existing = await this.findByMobile(normalizedPhone);
     }
     if (!existing) {
       throw new BadRequestException('User not found with the provided details');
     }
+
     const parsedDob = dateOfBirth ? this.parseDate(dateOfBirth) : null;
     const finalDob = (existing && existing.dateOfBirth) ? existing.dateOfBirth : parsedDob;
-    const finalPhone = (existing && existing.phoneNumber && String(existing.phoneNumber).trim() !== '') 
-      ? existing.phoneNumber 
-      : phoneNumber;
+    const finalPhone = (existing && existing.phoneNumber && String(existing.phoneNumber).trim() !== '')
+      ? existing.phoneNumber
+      : normalizedPhone;
 
     if (finalDob) {
       const dobDateObj = new Date(finalDob);
@@ -514,12 +558,49 @@ export class UsersService {
       }
     }
 
-    const updatePayload: any = { firstName, lastName, phoneNumber: finalPhone, dateOfBirth: finalDob };
+    const updatePayload: any = {
+      firstName,
+      lastName,
+      phoneNumber: finalPhone,
+      dateOfBirth: finalDob,
+    };
+    if (!existing.mobile || String(existing.mobile).trim() === '') {
+      updatePayload.mobile = finalPhone;
+    }
     if (profileImage !== undefined) {
       updatePayload.profileImage = profileImage;
     }
-    if (email && (existing.email !== email || existing.email.includes('@phone.vidyaloans.in'))) {
-      updatePayload.email = email;
+
+    if (
+      normalizedEmail &&
+      (String(existing.email || '').toLowerCase() !== normalizedEmail ||
+        String(existing.email || '').includes('@phone.vidyaloans.in'))
+    ) {
+      const emailOwner = await this.findOne(normalizedEmail);
+      if (emailOwner && emailOwner.id !== existing.id) {
+        const ownerHasDetails = !!(
+          emailOwner.firstName ||
+          emailOwner.lastName ||
+          emailOwner.dateOfBirth ||
+          emailOwner.phoneNumber
+        );
+        if (ownerHasDetails) {
+          throw new BadRequestException(
+            'This email address is already registered to another account. Please use a different email or log in using email.',
+          );
+        }
+        // Remove empty un-onboarded shell account so this verified user can claim the email cleanly
+        const { error: deleteErr } = await this.db
+          .from('User')
+          .delete()
+          .eq('id', emailOwner.id);
+        if (deleteErr) {
+          throw new BadRequestException(
+            'This email address is already registered to another account. Please use a different email.',
+          );
+        }
+      }
+      updatePayload.email = normalizedEmail;
     }
 
     const { data, error } = await this.db

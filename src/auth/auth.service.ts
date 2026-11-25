@@ -597,6 +597,7 @@ export class AuthService {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         userId: user.id,
+        email: user.email || '',
         userExists: !isNewUser,
         hasUserDetails,
         firstName: user.firstName,
@@ -731,12 +732,33 @@ export class AuthService {
     lastName: string,
     phoneNumber: string,
     dateOfBirth: string,
-    profileImage?: string
+    profileImage?: string,
+    userId?: string,
   ) {
-    // Check if user exists with the provided email or phone number
-    let existingUser = await this.usersService.findOne(email);
-    if (!existingUser && phoneNumber) {
-      existingUser = await this.usersService.findByMobile(phoneNumber);
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    const rawDigits = (phoneNumber || '').replace(/[^0-9]/g, '');
+    const normalizedPhone =
+      rawDigits.length > 10 && rawDigits.startsWith('91')
+        ? rawDigits.slice(-10)
+        : rawDigits;
+
+    // Prioritize explicit userId or phone-placeholder account before generic email lookup
+    let existingUser = userId ? await this.usersService.findById(userId) : null;
+    if (!existingUser && normalizedPhone) {
+      const mobileMatch = await this.usersService.findByMobile(normalizedPhone);
+      if (
+        mobileMatch &&
+        mobileMatch.email &&
+        String(mobileMatch.email).includes('@phone.vidyaloans.in')
+      ) {
+        existingUser = mobileMatch;
+      }
+    }
+    if (!existingUser && normalizedEmail) {
+      existingUser = await this.usersService.findOne(normalizedEmail);
+    }
+    if (!existingUser && normalizedPhone) {
+      existingUser = await this.usersService.findByMobile(normalizedPhone);
     }
     if (!existingUser) {
       return {
@@ -769,8 +791,7 @@ export class AuthService {
     if (!phoneRegex.test(phoneNumber)) {
       return { success: false, message: 'Please enter a valid phone number' };
     }
-    const digitsOnly = phoneNumber.replace(/[^0-9]/g, '');
-    if (digitsOnly.length !== 10) {
+    if (normalizedPhone.length !== 10) {
       return { success: false, message: 'Phone number must be exactly 10 digits' };
     }
 
@@ -811,12 +832,13 @@ export class AuthService {
     // Update user details
     try {
       const user = await this.usersService.updateUserDetails(
-        email,
+        normalizedEmail,
         firstName,
         lastName,
-        phoneNumber,
+        normalizedPhone,
         dateOfBirth,
-        profileImage
+        profileImage,
+        existingUser.id,
       );
 
       if (!user) {
@@ -827,6 +849,7 @@ export class AuthService {
         success: true,
         message: 'Profile updated successfully',
         user: {
+          userId: user.id,
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
@@ -839,7 +862,7 @@ export class AuthService {
       console.error('Error updating user details:', error);
       return {
         success: false,
-        message: 'Failed to update profile. Please try again or contact support.'
+        message: error?.message || 'Failed to update profile. Please try again or contact support.'
       };
     }
   }
