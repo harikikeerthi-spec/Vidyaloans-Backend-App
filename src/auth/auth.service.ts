@@ -61,6 +61,21 @@ export class AuthService {
     };
   }
 
+  private validateEmailAddress(email: string): string | null {
+    const clean = (email || '').trim().toLowerCase();
+    if (!clean) {
+      return 'Please enter your email address';
+    }
+    if (!clean.includes('@')) {
+      return 'Email must contain @ symbol';
+    }
+    const emailRegex = /^[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,}$/;
+    if (!emailRegex.test(clean)) {
+      return 'Please enter a valid email address (e.g., username@example.com)';
+    }
+    return null;
+  }
+
   async sendOtp(
     email: string,
     isSignup: boolean = false,
@@ -154,48 +169,15 @@ export class AuthService {
       }
     }
 
-    // Validate email format (for both signup and login)
-    if (!email || email.trim() === '') {
-      return { success: false, message: 'Please enter your email address' };
+    const emailErrorMsg = this.validateEmailAddress(email);
+    if (emailErrorMsg) {
+      return { success: false, message: emailErrorMsg };
     }
 
-    // Check for @ symbol first
-    if (!email.includes('@')) {
-      return { success: false, message: 'Email must contain @ symbol' };
-    }
-
-    // Split email into username and domain
-    const emailParts = email.split('@');
-    if (emailParts.length !== 2 || !emailParts[1].includes('.')) {
-      return { success: false, message: 'Email must have a valid domain (e.g., .com, .org)' };
-    }
-
-    const username = emailParts[0];
-    const domain = emailParts[1];
-
-    // Validate username: minimum 8 characters
-    if (username.length < 8) {
-      return { success: false, message: 'Email username (before @) must be at least 8 characters long' };
-    }
-
-    // Validate username: must include at least one alphabetical character (a-z)
-    if (!/[a-z]/.test(username)) {
-      return { success: false, message: 'Email username must include at least one alphabetical character (a-z)' };
-    }
-
-    // Validate username: no capital letters allowed
-    if (/[A-Z]/.test(username)) {
-      return { success: false, message: 'Email username must not contain capital letters' };
-    }
-
-    // Email validation: must contain lowercase letters, @, and a valid domain
-    const emailRegex = /^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/;
-    if (!emailRegex.test(email.toLowerCase())) {
-      return { success: false, message: 'Please enter a valid email address (e.g., username@example.com)' };
-    }
+    const cleanEmail = email.trim().toLowerCase();
 
     // Check if user exists
-    const existingUser = await this.usersService.findOne(email);
+    const existingUser = await this.usersService.findOne(cleanEmail);
 
     if (isSignup && existingUser) {
       // User trying to signup but already exists
@@ -207,9 +189,8 @@ export class AuthService {
       return { success: false, message: 'User not found. Please signup first.', redirect: 'signup' };
     }
 
-    const cleanEmail = email.toLowerCase().trim();
     if (cleanEmail === 'reviewer@vidyaloans.in') {
-      this.otps.set(email, { otp: '123456', expiresAt: Date.now() + 86400000 });
+      this.otps.set(cleanEmail, { otp: '123456', expiresAt: Date.now() + 86400000 });
       return {
         success: true,
         message: 'OTP sent successfully',
@@ -217,37 +198,40 @@ export class AuthService {
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    this.otps.set(email, { otp, expiresAt: Date.now() + 60000 }); // Expires in 1 minute
-    console.log(`[AuthService] New OTP generated for ${email}: ${otp}`);
+    this.otps.set(cleanEmail, { otp, expiresAt: Date.now() + 300000 }); // Expires in 5 minutes
 
     // Store signup data for registration - ONLY update if fields are provided
     // This prevents overwriting existing data with 'undefined' during resend
     if (isSignup && signupInfo) {
-      const existingData = this.signupData.get(email) || {};
+      const existingData = this.signupData.get(cleanEmail) || {};
 
-      this.signupData.set(email, {
+      this.signupData.set(cleanEmail, {
         firstName: signupInfo.firstName ?? existingData.firstName,
         lastName: signupInfo.lastName ?? existingData.lastName,
         phoneNumber: signupInfo.phoneNumber ?? existingData.phoneNumber,
         dateOfBirth: signupInfo.dateOfBirth ?? existingData.dateOfBirth,
       });
-      console.log(`[AuthService] Signup data updated/preserved for ${email}`);
     }
 
     try {
-      await this.emailService.sendOtp(email, otp);
+      await this.emailService.sendOtp(cleanEmail, otp);
     } catch (emailError) {
-      console.warn(`[AuthService] SMTP failed to send email but OTP is generated: ${otp}`, emailError);
+      this.otps.delete(cleanEmail);
+      console.error(`[AuthService] Failed to deliver OTP email to ${cleanEmail}:`, emailError);
+      return {
+        success: false,
+        message: 'Unable to send OTP email right now. Please try Phone OTP or Google Sign-In, or try again later.',
+      };
     }
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: 'OTP sent successfully',
-      ...(process.env.NODE_ENV === 'development' ? { otp } : {})
     };
   }
 
   async checkUserExists(email: string) {
-    const user = await this.usersService.findOne(email);
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const user = await this.usersService.findOne(cleanEmail);
     if (user) {
       return { exists: true, message: 'User found' };
     } else {
@@ -262,46 +246,18 @@ export class AuthService {
    * Step 1 of unified flow
    */
   async sendOtpUnified(email: string) {
-    // Validate email format
-    if (!email || email.trim() === '') {
-      return { success: false, message: 'Please enter your email address' };
+    const emailErrorMsg = this.validateEmailAddress(email);
+    if (emailErrorMsg) {
+      return { success: false, message: emailErrorMsg };
     }
 
-    if (!email.includes('@')) {
-      return { success: false, message: 'Email must contain @ symbol' };
-    }
-
-    const emailParts = email.split('@');
-    if (emailParts.length !== 2 || !emailParts[1].includes('.')) {
-      return { success: false, message: 'Email must have a valid domain (e.g., .com, .org)' };
-    }
-
-    const username = emailParts[0];
-    const domain = emailParts[1];
-
-    if (username.length < 8) {
-      return { success: false, message: 'Email username (before @) must be at least 8 characters long' };
-    }
-
-    if (!/[a-z]/.test(username)) {
-      return { success: false, message: 'Email username must include at least one alphabetical character (a-z)' };
-    }
-
-    if (/[A-Z]/.test(username)) {
-      return { success: false, message: 'Email username must not contain capital letters' };
-    }
-
-    const emailRegex = /^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/;
-    if (!emailRegex.test(email.toLowerCase())) {
-      return { success: false, message: 'Please enter a valid email address (e.g., username@example.com)' };
-    }
+    const cleanEmail = email.trim().toLowerCase();
 
     try {
-      const cleanEmail = email.toLowerCase().trim();
       const isReviewer = cleanEmail === 'reviewer@vidyaloans.in';
       if (isReviewer) {
-        this.otps.set(email, { otp: '123456', expiresAt: Date.now() + 86400000 });
-        await this.usersService.ensureReviewerProfileAndData(email);
+        this.otps.set(cleanEmail, { otp: '123456', expiresAt: Date.now() + 86400000 });
+        await this.usersService.ensureReviewerProfileAndData(cleanEmail);
         return {
           success: true,
           message: 'OTP sent successfully',
@@ -310,31 +266,34 @@ export class AuthService {
       }
 
       // Check if user exists
-      const existingUser = await this.usersService.findOne(email);
+      const existingUser = await this.usersService.findOne(cleanEmail);
 
       // Generate OTP
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      this.otps.set(email, { otp, expiresAt: Date.now() + 60000 }); // Expires in 1 minute
-      console.log(`[AuthService] OTP generated for ${email}: ${otp}`);
+      this.otps.set(cleanEmail, { otp, expiresAt: Date.now() + 300000 }); // Expires in 5 minutes
 
       // Send OTP via email
       try {
-        await this.emailService.sendOtp(email, otp);
+        await this.emailService.sendOtp(cleanEmail, otp);
       } catch (emailError) {
-        console.warn(`[AuthService] SMTP failed to send email but OTP is generated: ${otp}`, emailError);
+        this.otps.delete(cleanEmail);
+        console.error(`[AuthService] Failed to deliver unified OTP email to ${cleanEmail}:`, emailError);
+        return {
+          success: false,
+          message: 'Unable to send OTP email right now. Please try Phone OTP or Google Sign-In, or try again later.',
+        };
       }
 
       return {
         success: true,
         message: 'OTP sent successfully',
         userExists: !!existingUser, // Return whether user exists or not
-        ...(process.env.NODE_ENV === 'development' ? { otp } : {})
       };
     } catch (error) {
       console.error('[AuthService] Database or Email error in sendOtpUnified:', error);
       return {
         success: false,
-        message: 'Internal error: Could not connect to the database or email service. Please check your Railway environment variables and ensure the database is migrated.',
+        message: 'Internal error: Could not connect to the database or email service. Please try again later.',
         error: error.message
       };
     }
@@ -349,34 +308,35 @@ export class AuthService {
    * For new users: create user + return token + userExists=false, hasUserDetails=false
    */
   async verifyOtpUnified(email: string, otp: string) {
-    const cleanEmail = email.toLowerCase().trim();
+    const cleanEmail = (email || '').toLowerCase().trim();
+    const cleanOtp = (otp || '').trim();
     const isReviewer = cleanEmail === 'reviewer@vidyaloans.in';
-    const isReviewerMasterOtp = isReviewer && otp.trim() === '123456';
+    const isReviewerMasterOtp = isReviewer && cleanOtp === '123456';
 
-    const stored = this.otps.get(email);
+    const stored = this.otps.get(cleanEmail);
     
     if (!isReviewerMasterOtp) {
-      if (!stored || stored.otp !== otp) {
+      if (!stored || stored.otp !== cleanOtp) {
         throw new BadRequestException('Invalid OTP. Please enter the right one to login.');
       }
 
       if (Date.now() > stored.expiresAt) {
-        this.otps.delete(email);
+        this.otps.delete(cleanEmail);
         throw new BadRequestException('OTP has expired. Please request a new OTP.');
       }
     }
 
     if (!isReviewer) {
-      this.otps.delete(email);
+      this.otps.delete(cleanEmail);
     }
 
     try {
       let user: any = null;
       try {
         if (isReviewer) {
-          await this.usersService.ensureReviewerProfileAndData(email);
+          await this.usersService.ensureReviewerProfileAndData(cleanEmail);
         }
-        user = await this.usersService.findOne(email);
+        user = await this.usersService.findOne(cleanEmail);
       } catch (dbErr) {
         console.error('[AuthService.verifyOtpUnified] Database error finding user:', dbErr);
         if (isReviewer) {
@@ -409,11 +369,11 @@ export class AuthService {
           };
         } else {
           // Create new user with only email; optional fields omitted
-          user = await this.usersService.create({ email });
-          console.log(`[AuthService] New user created: ${email}`);
+          user = await this.usersService.create({ email: cleanEmail });
+          console.log(`[AuthService] New user created: ${cleanEmail}`);
 
           // Fire-and-forget: send welcome email to new user (non-blocking)
-          void this.emailService.sendWelcomeEmail(email, user.firstName ?? undefined);
+          void this.emailService.sendWelcomeEmail(cleanEmail, user.firstName ?? undefined);
 
           // Emit candidate registered event for staff notifications
           this.eventEmitter.emit('candidate.registered', {

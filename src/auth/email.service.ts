@@ -1,31 +1,89 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import PDFDocument from 'pdfkit';
 
 @Injectable()
 export class EmailService {
-  private transporter;
+  private transporter: nodemailer.Transporter | null = null;
+  private readonly configuredUser: string;
+  private readonly configuredPass: string;
 
-  constructor() {
-    // Configure SMTP transporter using environment variables
-    this.transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.EMAIL_PORT || '587'),
-      secure: false, // true for 465, false for other ports
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
+  constructor(@Optional() private readonly configService?: ConfigService) {
+    const host = this.getEnv('EMAIL_HOST') || 'smtp.gmail.com';
+    const port = parseInt(this.getEnv('EMAIL_PORT') || '587', 10) || 587;
+    this.configuredUser = this.getEnv('EMAIL_USER');
+    this.configuredPass = this.getEnv('EMAIL_PASS');
+
+    if (this.configuredUser && this.configuredPass) {
+      this.transporter = nodemailer.createTransport({
+        host,
+        port,
+        secure: port === 465,
+        auth: {
+          user: this.configuredUser,
+          pass: this.configuredPass,
+        },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 15000,
+      });
+    }
   }
 
-  async sendOtp(email: string, otp: string) {
-    const timestamp = new Date().toLocaleTimeString();
+  private getEnv(key: string): string {
+    return (this.configService?.get<string>(key) ?? process.env[key] ?? '').trim();
+  }
+
+  private getFromAddress(displayName = 'VidyaLoan'): string {
+    const envFrom = this.getEnv('EMAIL_FROM');
+    if (envFrom && !envFrom.includes('[EMAIL_ADDRESS]')) {
+      return envFrom;
+    }
+    if (this.configuredUser) {
+      return `"${displayName}" <${this.configuredUser}>`;
+    }
+    return `"${displayName}" <noreply@vidyaloans.in>`;
+  }
+
+  private async sendViaResend(mailOptions: {
+    from: string;
+    to: string;
+    subject: string;
+    text?: string;
+    html?: string;
+  }): Promise<boolean> {
+    const apiKey = this.getEnv('RESEND_API_KEY');
+    if (!apiKey) return false;
+
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: mailOptions.from,
+        to: [mailOptions.to],
+        subject: mailOptions.subject,
+        html: mailOptions.html,
+        text: mailOptions.text,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`Resend API error (${response.status}): ${errText}`);
+    }
+    return true;
+  }
+
+  async sendOtp(email: string, otp: string): Promise<void> {
     const mailOptions = {
-      from: process.env.EMAIL_FROM || '"VidyaLoan" <[EMAIL_ADDRESS]>',
+      from: this.getFromAddress('VidyaLoan'),
       to: email,
       subject: `Your VidyaLoan OTP Verification Code`,
-      text: `Your OTP is: ${otp}. This code expires in 1 minutes.`,
+      text: `Your OTP is: ${otp}. This code expires in 5 minutes.`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
           <div style="background: linear-gradient(135deg, #6605c7 0%, #8b5cf6 100%); padding: 30px; border-radius: 10px; text-align: center;">
@@ -37,31 +95,41 @@ export class EmailService {
             <div style="background: white; padding: 20px; border-radius: 10px; text-align: center; margin: 20px 0;">
               <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #6605c7;">${otp}</span>
             </div>
-            <p style="color: #999; font-size: 14px;">This code expires in 1 minutes. Do not share this code with anyone.</p>
+            <p style="color: #999; font-size: 14px;">This code expires in 5 minutes. Do not share this code with anyone.</p>
           </div>
         </div>
       `,
     };
 
-    try {
-      // Always log to console for debugging
-      console.log(`[EmailService] PREPARING TO SEND OTP`);
-      console.log(`[EmailService] Target Email: ${email}`);
-      console.log(`[EmailService] OTP Value: ${otp}`);
-      console.log(`--------------------------------`);
+    let lastError: unknown = null;
 
-      // Send actual email if credentials are configured
-      if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    if (this.transporter) {
+      try {
         await this.transporter.sendMail(mailOptions);
-        console.log(`Email sent successfully to ${email}`);
-      } else {
-        console.log(`Email credentials not configured - OTP only logged to console`);
+        console.log(`[EmailService] OTP email sent via SMTP to ${email}`);
+        return;
+      } catch (smtpError) {
+        lastError = smtpError;
+        console.error(`[EmailService] SMTP sendOtp failed for ${email}:`, (smtpError as Error)?.message || smtpError);
       }
-    } catch (error) {
-      console.error('Error sending email:', error);
-      // Don't throw - still allow OTP flow to work even if email fails
-      console.log(`Email failed but OTP is: ${otp}`);
     }
+
+    if (this.getEnv('RESEND_API_KEY')) {
+      try {
+        await this.sendViaResend(mailOptions);
+        console.log(`[EmailService] OTP email sent via Resend to ${email}`);
+        return;
+      } catch (resendError) {
+        lastError = resendError;
+        console.error(`[EmailService] Resend sendOtp failed for ${email}:`, (resendError as Error)?.message || resendError);
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
+
+    throw new Error('Email delivery service is not configured (missing SMTP or RESEND_API_KEY)');
   }
 
   async sendDigilockerConsentRequest(email: string, consentLink: string, documentTypes: string[]) {
@@ -1740,13 +1808,15 @@ export class EmailService {
   async sendAiToolResultEmail(email: string, toolName: string, resultData: any) {
     try {
       const mailOptions = {
-        from: process.env.EMAIL_FROM || '"VidyaLoan" <noreply@vidyaloan.com>',
+        from: this.getFromAddress('VidyaLoan'),
         to: email,
         subject: `Your ${toolName} Report - VidyaLoan AI`,
         text: `Here is your ${toolName} report: ${JSON.stringify(resultData)}`,
         html: `<div><h2>${toolName} Report</h2><pre>${JSON.stringify(resultData, null, 2)}</pre></div>`,
       };
-      await this.transporter.sendMail(mailOptions);
+      if (this.transporter) {
+        await this.transporter.sendMail(mailOptions);
+      }
     } catch (error) {
       console.error(`[EmailService] Failed to send AI tool result email to ${email}:`, error);
     }
