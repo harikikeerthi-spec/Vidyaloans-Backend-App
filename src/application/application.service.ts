@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { SupabaseService } from '../supabase/supabase.service';
 import { DigilockerService } from '../integration/digilocker.service';
 import { DocumentVerificationService } from '../ai/services/document-verification.service';
@@ -170,10 +171,11 @@ export class ApplicationService {
     const { data: application, error } = await this.db
       .from('LoanApplication')
       .insert({
+        id: randomUUID(),
         applicationNumber,
         userId,
         assignedStaffId: assignedStaffId || null,
-        bank: data.assignedBank ? data.assignedBank : 'Matching Lenders',
+        bank: data.assignedBank || data.bank || 'Matching Lenders',
         loanType: data.loanType || 'Education Loan',
         amount: parseNum(data.amount) || 1000000,
         tenure: parseNum(data.tenure) ? Math.round(parseNum(data.tenure)!) : null,
@@ -311,7 +313,7 @@ export class ApplicationService {
           const firstName = application.firstName || application.user?.firstName || '';
           const lastName = application.lastName || application.user?.lastName || '';
           const userName = `${firstName} ${lastName}`.trim() || 'Student';
-          const bankName = application.assignedBank || 'Matching Lenders';
+          const bankName = application.bank || 'Matching Lenders';
           await this.emailService.sendLoanSubmissionEmail(email, userName, bankName, application);
         }
       } catch (e) {
@@ -325,7 +327,7 @@ export class ApplicationService {
           const firstName = application.user?.firstName || application.firstName || '';
           const lastName = application.user?.lastName || application.lastName || '';
           const userName = `${firstName} ${lastName}`.trim() || 'Student';
-          const bankName = application.assignedBank || 'Matching Lenders';
+          const bankName = application.bank || 'Matching Lenders';
           await this.emailService.sendLoanTrackingEmail(registeredEmail, userName, bankName, application);
         }
       } catch (e) {
@@ -938,18 +940,21 @@ export class ApplicationService {
     // Fetch user's existing vault documents to auto-populate if possible
     const { data: vaultDocs } = await this.db.from('UserDocument').select('*').eq('userId', userId);
     
+    const nowIso = new Date().toISOString();
     for (const doc of requiredDocs) {
       // Find if user already has this document in their vault
       const matchingVaultDoc = vaultDocs?.find(vd => vd.docType === doc.docType && vd.uploaded);
       
-      await this.db.from('ApplicationDocument').insert({ 
+      await this.db.from('ApplicationDocument').insert({
+        id: randomUUID(),
         applicationId, 
         docType: doc.docType, 
         docName: doc.docName, 
         fileName: matchingVaultDoc?.fileName || '', 
         filePath: matchingVaultDoc?.filePath || '', 
         status: matchingVaultDoc ? 'pending' : 'not_uploaded', 
-        isRequired: doc.isRequired 
+        isRequired: doc.isRequired,
+        updatedAt: nowIso,
       });
     }
   }
@@ -959,14 +964,15 @@ export class ApplicationService {
     if (application.userId !== userId) throw new BadRequestException('Unauthorized to upload documents');
 
     const { data: existingDoc } = await this.db.from('ApplicationDocument').select('id').eq('applicationId', applicationId).eq('docType', documentData.docType).single();
+    const nowIso = new Date().toISOString();
 
     let document: any;
     if (existingDoc) {
-      const { data, error } = await this.db.from('ApplicationDocument').update({ ...documentData, status: 'pending', uploadedAt: new Date().toISOString() }).eq('id', existingDoc.id).select().single();
+      const { data, error } = await this.db.from('ApplicationDocument').update({ ...documentData, status: 'pending', uploadedAt: nowIso, updatedAt: nowIso }).eq('id', existingDoc.id).select().single();
       if (error) throw error;
       document = data;
     } else {
-      const { data, error } = await this.db.from('ApplicationDocument').insert({ applicationId, ...documentData, status: 'pending' }).select().single();
+      const { data, error } = await this.db.from('ApplicationDocument').insert({ id: randomUUID(), applicationId, ...documentData, status: 'pending', updatedAt: nowIso }).select().single();
       if (error) throw error;
       document = data;
     }
@@ -1096,20 +1102,24 @@ export class ApplicationService {
           };
           
           if (existing) {
-            await this.db.from('ApplicationDocument').update(updateData).eq('id', existing.id);
+            await this.db.from('ApplicationDocument').update({ ...updateData, updatedAt: new Date().toISOString() }).eq('id', existing.id);
           } else {
-            await this.db.from('ApplicationDocument').insert(updateData);
+            await this.db.from('ApplicationDocument').insert({ id: randomUUID(), ...updateData, updatedAt: new Date().toISOString() });
           }
           syncedCount++;
         }
       } else if (!existing) {
         // Just create the requirement placeholder
         await this.db.from('ApplicationDocument').insert({
+          id: randomUUID(),
           applicationId,
           docType: req.docType,
           docName: req.docName,
+          fileName: '',
+          filePath: '',
           status: 'not_uploaded',
-          isRequired: req.isRequired
+          isRequired: req.isRequired,
+          updatedAt: new Date().toISOString(),
         });
       }
     }
@@ -1535,7 +1545,7 @@ export class ApplicationService {
   async addApplicationNote(applicationId: string, authorId: string, authorName: string, data: { content: string; type?: string; isInternal?: boolean }) {
     const { data: note, error } = await this.db
       .from('ApplicationNote')
-      .insert({ applicationId, authorId, authorName, content: data.content, type: data.type || 'general', isInternal: data.isInternal || false })
+      .insert({ id: randomUUID(), applicationId, authorId, authorName, content: data.content, type: data.type || 'general', isInternal: data.isInternal || false, updatedAt: new Date().toISOString() })
       .select()
       .single();
 
@@ -1688,7 +1698,7 @@ export class ApplicationService {
       const { data: documents } = await this.db.from('ApplicationDocument').select('*').eq('applicationId', applicationId);
       const reviewResult = await this.applicationReviewService.reviewApplication(application, documents || []);
 
-      await this.db.from('ApplicationNote').insert({ applicationId, authorId: adminId, authorName: 'AI Review System', content: JSON.stringify(reviewResult), type: 'ai_review', isInternal: true });
+      await this.db.from('ApplicationNote').insert({ id: randomUUID(), applicationId, authorId: adminId, authorName: 'AI Review System', content: JSON.stringify(reviewResult), type: 'ai_review', isInternal: true, updatedAt: new Date().toISOString() });
       await this.createStatusHistory(applicationId, { fromStatus: application.status, toStatus: application.status, changedBy: adminId, changedByName: adminName, notes: `AI Review completed. Score: ${reviewResult.overallScore}/100. Recommendation: ${reviewResult.recommendation}`, isAutomatic: true });
 
       // Emit real-time CIBIL verification activity
@@ -1745,7 +1755,12 @@ export class ApplicationService {
   }
 
   private async createStatusHistory(applicationId: string, data: { fromStatus?: string; toStatus?: string; fromStage?: string; toStage?: string; changedBy?: string; changedByName?: string; changeReason?: string; notes?: string; isAutomatic?: boolean }) {
-    await this.db.from('ApplicationStatusHistory').insert({ applicationId, ...data });
+    await this.db.from('ApplicationStatusHistory').insert({
+      id: randomUUID(),
+      applicationId,
+      toStatus: data.toStatus || 'submitted',
+      ...data,
+    });
   }
 
   async getAgentApplications(agentId: string) {
@@ -1899,7 +1914,7 @@ export class ApplicationService {
       );
 
       // Log the share action as a note
-      await this.db.from('ApplicationNote').insert({ applicationId, authorId: adminId, authorName: adminName, content: `Application details shared to registered email: ${userEmail}`, type: 'share', isInternal: true });
+      await this.db.from('ApplicationNote').insert({ id: randomUUID(), applicationId, authorId: adminId, authorName: adminName, content: `Application details shared to registered email: ${userEmail}`, type: 'share', isInternal: true, updatedAt: new Date().toISOString() });
 
       return { success: true, message: 'Application details shared successfully' };
     } catch (error) {
@@ -2144,7 +2159,8 @@ export class ApplicationService {
         authorName: 'EVV Engine',
         content: auditNotes,
         type: 'general',
-        isInternal: true
+        isInternal: true,
+        updatedAt: new Date().toISOString(),
       }),
       this.createStatusHistory(applicationId, {
         fromStatus: application.status,
