@@ -217,9 +217,11 @@ export class AuthService {
       await this.emailService.sendOtp(cleanEmail, otp);
     } catch (emailError) {
       this.otps.delete(cleanEmail);
-      console.error(`[AuthService] Failed to deliver OTP email to ${cleanEmail}:`, emailError);
+      const errorCode = EmailService.classifyError(emailError);
+      console.error(`[AuthService] Failed to deliver OTP email to ${cleanEmail} (${errorCode}):`, emailError);
       return {
         success: false,
+        errorCode,
         message: 'Unable to send OTP email right now. Please try Phone OTP or Google Sign-In, or try again later.',
       };
     }
@@ -277,9 +279,11 @@ export class AuthService {
         await this.emailService.sendOtp(cleanEmail, otp);
       } catch (emailError) {
         this.otps.delete(cleanEmail);
-        console.error(`[AuthService] Failed to deliver unified OTP email to ${cleanEmail}:`, emailError);
+        const errorCode = EmailService.classifyError(emailError);
+        console.error(`[AuthService] Failed to deliver unified OTP email to ${cleanEmail} (${errorCode}):`, emailError);
         return {
           success: false,
+          errorCode,
           message: 'Unable to send OTP email right now. Please try Phone OTP or Google Sign-In, or try again later.',
         };
       }

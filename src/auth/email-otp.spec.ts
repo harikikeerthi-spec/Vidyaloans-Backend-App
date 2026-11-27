@@ -40,6 +40,27 @@ describe('Email OTP fixes', () => {
     expect(mailArgs.text).toContain('5 minutes');
   });
 
+  it('EmailService retries with EMAIL_USER when custom EMAIL_FROM is rejected as unowned sender', async () => {
+    process.env.EMAIL_USER = 'support@vidyaloans.in';
+    process.env.EMAIL_PASS = 'test-pass';
+    process.env.EMAIL_FROM = '"VidyaLoan" <noreply@vidyaloan.com>';
+    delete process.env.RESEND_API_KEY;
+
+    const emailService = new EmailService();
+    const sendMailSpy = jest
+      .spyOn((emailService as any).transporter, 'sendMail')
+      .mockRejectedValueOnce(
+        Object.assign(new Error('553 Sender address rejected: not owned by user'), {
+          responseCode: 553,
+        }),
+      )
+      .mockResolvedValueOnce({ messageId: 'ok-fallback' });
+
+    await emailService.sendOtp('sai@gmail.com', '654321');
+    expect(sendMailSpy).toHaveBeenCalledTimes(2);
+    expect((sendMailSpy.mock.calls[1][0] as any).from).toContain('support@vidyaloans.in');
+  });
+
   it('AuthService.sendOtpUnified accepts <8 char usernames, suppresses raw otp leak, and returns failure when email fails', async () => {
     const usersService = {
       findOne: jest.fn().mockResolvedValue(null),

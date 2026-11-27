@@ -5,30 +5,36 @@ import PDFDocument from 'pdfkit';
 
 @Injectable()
 export class EmailService {
+  private readonly configuredHost: string;
+  private readonly configuredPort: number;
   private transporter: nodemailer.Transporter | null = null;
   private readonly configuredUser: string;
   private readonly configuredPass: string;
 
   constructor(@Optional() private readonly configService?: ConfigService) {
-    const host = this.getEnv('EMAIL_HOST') || 'smtp.gmail.com';
-    const port = parseInt(this.getEnv('EMAIL_PORT') || '587', 10) || 587;
+    this.configuredHost = this.getEnv('EMAIL_HOST') || 'smtp.gmail.com';
+    this.configuredPort = parseInt(this.getEnv('EMAIL_PORT') || '587', 10) || 587;
     this.configuredUser = this.getEnv('EMAIL_USER');
     this.configuredPass = this.getEnv('EMAIL_PASS');
 
     if (this.configuredUser && this.configuredPass) {
-      this.transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        auth: {
-          user: this.configuredUser,
-          pass: this.configuredPass,
-        },
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 15000,
-      });
+      this.transporter = this.buildSmtpTransporter(this.configuredPass);
     }
+  }
+
+  private buildSmtpTransporter(pass: string): nodemailer.Transporter {
+    return nodemailer.createTransport({
+      host: this.configuredHost,
+      port: this.configuredPort,
+      secure: this.configuredPort === 465,
+      auth: {
+        user: this.configuredUser,
+        pass,
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+    });
   }
 
   private getEnv(key: string): string {
@@ -44,6 +50,32 @@ export class EmailService {
       return `"${displayName}" <${this.configuredUser}>`;
     }
     return `"${displayName}" <noreply@vidyaloans.in>`;
+  }
+
+  static classifyError(err: unknown): string {
+    const anyErr = err as any;
+    const code = String(anyErr?.code || '').toUpperCase();
+    const responseCode = Number(anyErr?.responseCode || 0);
+    const msg = String(anyErr?.message || anyErr || '').toLowerCase();
+
+    if (msg.includes('not configured')) return 'EMAIL_NOT_CONFIGURED';
+    if (msg.includes('resend api error')) return 'RESEND_API_ERROR';
+    if (code === 'EAUTH' || responseCode === 535 || msg.includes('username and password not accepted') || msg.includes('invalid login')) {
+      return 'SMTP_AUTH_FAILED';
+    }
+    if (responseCode === 550 || responseCode === 553 || msg.includes('sender') || msg.includes('not owned')) {
+      return 'SMTP_SENDER_REJECTED';
+    }
+    if (code === 'ETIMEDOUT' || msg.includes('timeout')) {
+      return 'SMTP_CONNECTION_TIMEOUT';
+    }
+    if (code === 'ESOCKET' || msg.includes('tls') || msg.includes('ssl') || msg.includes('wrong version')) {
+      return 'SMTP_TLS_OR_SOCKET_ERROR';
+    }
+    if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ECONNRESET') {
+      return 'SMTP_CONNECTION_ERROR';
+    }
+    return 'EMAIL_DELIVERY_FAILED';
   }
 
   private async sendViaResend(mailOptions: {
@@ -109,8 +141,44 @@ export class EmailService {
         console.log(`[EmailService] OTP email sent via SMTP to ${email}`);
         return;
       } catch (smtpError) {
+        const errClass = EmailService.classifyError(smtpError);
+
+        // Retry with authenticated EMAIL_USER as From if custom EMAIL_FROM was rejected
+        if (errClass === 'SMTP_SENDER_REJECTED' && this.configuredUser) {
+          const fallbackFrom = `"VidyaLoan" <${this.configuredUser}>`;
+          if (mailOptions.from !== fallbackFrom) {
+            try {
+              await this.transporter.sendMail({ ...mailOptions, from: fallbackFrom });
+              console.log(`[EmailService] OTP email sent via SMTP sender fallback to ${email}`);
+              return;
+            } catch (retryErr) {
+              smtpError = retryErr;
+            }
+          }
+        }
+
+        // Retry once without whitespace if a Gmail App Password was pasted with spaces
+        if (
+          EmailService.classifyError(smtpError) === 'SMTP_AUTH_FAILED' &&
+          this.configuredHost.toLowerCase().includes('gmail') &&
+          /\s/.test(this.configuredPass)
+        ) {
+          try {
+            const compactTransporter = this.buildSmtpTransporter(this.configuredPass.replace(/\s+/g, ''));
+            await compactTransporter.sendMail(mailOptions);
+            this.transporter = compactTransporter;
+            console.log(`[EmailService] OTP email sent via compacted Gmail password to ${email}`);
+            return;
+          } catch (retryAuthErr) {
+            smtpError = retryAuthErr;
+          }
+        }
+
         lastError = smtpError;
-        console.error(`[EmailService] SMTP sendOtp failed for ${email}:`, (smtpError as Error)?.message || smtpError);
+        console.error(
+          `[EmailService] SMTP sendOtp failed for ${email} (${EmailService.classifyError(smtpError)}):`,
+          (smtpError as Error)?.message || smtpError,
+        );
       }
     }
 
