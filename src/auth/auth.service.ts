@@ -511,6 +511,24 @@ export class AuthService {
           void this.emailService.sendWelcomeEmail(email, user.firstName ?? undefined);
         }
       } else {
+        // If user already exists with a real email, clean up any obsolete phone shell account
+        if (cleanPhone && user.email && !String(user.email).includes('@phone.vidyaloans.in')) {
+          try {
+            const shellAccount = await this.usersService.findByMobile(cleanPhone);
+            if (
+              shellAccount &&
+              shellAccount.id !== user.id &&
+              shellAccount.email &&
+              String(shellAccount.email).includes('@phone.vidyaloans.in')
+            ) {
+              console.log(`[AuthService] Cleaning obsolete phone shell account ${shellAccount.id} for user ${user.id}`);
+              await this.usersService.deleteUser(shellAccount.id);
+            }
+          } catch (cleanErr) {
+            console.warn('[AuthService] Could not clean obsolete shell account:', cleanErr);
+          }
+        }
+
         // If user already exists but doesn't have a phone number, backfill it
         if (cleanPhone && (!user.phoneNumber || String(user.phoneNumber).trim() === '') && user.email) {
           try {

@@ -183,29 +183,50 @@ export class UsersService {
   }
 
   async findByMobile(mobile: string) {
-    const cleanMobile = (mobile || '').replace(/\D/g, '');
-    const cleanMobileNoCountry =
-      cleanMobile.length > 10 && cleanMobile.startsWith('91')
-        ? cleanMobile.slice(-10)
-        : cleanMobile;
+    const cleanDigits = (mobile || '').replace(/\D/g, '');
+    const clean10 =
+      cleanDigits.length > 10 && cleanDigits.startsWith('91')
+        ? cleanDigits.slice(-10)
+        : cleanDigits.length >= 10
+        ? cleanDigits.slice(-10)
+        : cleanDigits;
 
-    if (!cleanMobileNoCountry || cleanMobileNoCountry.length < 6) {
+    if (!clean10 || clean10.length < 6) {
       return null;
     }
 
-    const { data } = await this.db
+    // Build PostgREST-safe query parameters.
+    // In PostgREST .or() URL parameters:
+    // - '+' must be URL-encoded as '%2B'
+    // - Spaces must be URL-encoded as '%20'
+    // - '%' wildcard for ILIKE must be URL-encoded as '%25'
+    const orFilter = [
+      `mobile.eq.${clean10}`,
+      `phoneNumber.eq.${clean10}`,
+      `mobile.eq.91${clean10}`,
+      `phoneNumber.eq.91${clean10}`,
+      `mobile.eq.%2B91${clean10}`,
+      `phoneNumber.eq.%2B91${clean10}`,
+      `mobile.eq.%2B91%20${clean10}`,
+      `phoneNumber.eq.%2B91%20${clean10}`,
+      `mobile.ilike.%25${clean10}`,
+      `phoneNumber.ilike.%25${clean10}`,
+    ].join(',');
+
+    const { data, error } = await this.db
       .from('User')
       .select('*')
-      .or(
-        `mobile.eq.${mobile},phoneNumber.eq.${mobile},mobile.eq.${cleanMobileNoCountry},phoneNumber.eq.${cleanMobileNoCountry},mobile.ilike.%${cleanMobileNoCountry},phoneNumber.ilike.%${cleanMobileNoCountry}`,
-      )
+      .or(orFilter)
       .order('createdAt', { ascending: false })
       .limit(10);
 
-    if (!data || data.length === 0) return null;
-    if (data.length === 1) return data[0];
+    if (error) {
+      console.error('[UsersService.findByMobile] Query error:', error);
+    }
 
-    // Prefer a row that already completed onboarding (has real email, name, and DOB)
+    if (!data || data.length === 0) return null;
+
+    // 1. Highest priority: User who has completed profile with real email, names, and DOB
     const completed = data.find(
       (u) =>
         u.firstName &&
@@ -216,10 +237,17 @@ export class UsersService {
     );
     if (completed) return completed;
 
+    // 2. User with real email (not a phone placeholder)
     const withRealEmail = data.find(
       (u) => u.email && !String(u.email).includes('@phone.vidyaloans.in'),
     );
-    return withRealEmail || data[0];
+    if (withRealEmail) return withRealEmail;
+
+    // 3. User with names or DOB
+    const withDetails = data.find((u) => u.firstName || u.lastName || u.dateOfBirth);
+    if (withDetails) return withDetails;
+
+    return data[0];
   }
 
   /**
@@ -518,16 +546,6 @@ export class UsersService {
         : digitsPhone || phoneNumber;
 
     let existing = userId ? await this.findById(userId) : null;
-    if (!existing && normalizedPhone) {
-      const mobileMatch = await this.findByMobile(normalizedPhone);
-      if (
-        mobileMatch &&
-        mobileMatch.email &&
-        String(mobileMatch.email).includes('@phone.vidyaloans.in')
-      ) {
-        existing = mobileMatch;
-      }
-    }
     if (!existing && normalizedEmail) {
       existing = await this.findOne(normalizedEmail);
     }
@@ -538,11 +556,27 @@ export class UsersService {
       throw new BadRequestException('User not found with the provided details');
     }
 
+    // If an obsolete un-onboarded shell account exists holding this phone number, clean it up
+    if (existing && normalizedPhone) {
+      try {
+        const shellAccount = await this.findByMobile(normalizedPhone);
+        if (
+          shellAccount &&
+          shellAccount.id !== existing.id &&
+          shellAccount.email &&
+          String(shellAccount.email).includes('@phone.vidyaloans.in')
+        ) {
+          console.log(`[UsersService.updateUserDetails] Cleaning obsolete phone shell account ${shellAccount.id} for user ${existing.id}`);
+          await this.db.from('User').delete().eq('id', shellAccount.id);
+        }
+      } catch (cleanErr) {
+        console.warn('[UsersService.updateUserDetails] Non-fatal error cleaning shell account:', cleanErr);
+      }
+    }
+
     const parsedDob = dateOfBirth ? this.parseDate(dateOfBirth) : null;
     const finalDob = (existing && existing.dateOfBirth) ? existing.dateOfBirth : parsedDob;
-    const finalPhone = (existing && existing.phoneNumber && String(existing.phoneNumber).trim() !== '')
-      ? existing.phoneNumber
-      : normalizedPhone;
+    const finalPhone = normalizedPhone || (existing && existing.phoneNumber) || '';
 
     if (finalDob) {
       const dobDateObj = new Date(finalDob);
@@ -562,11 +596,9 @@ export class UsersService {
       firstName,
       lastName,
       phoneNumber: finalPhone,
+      mobile: finalPhone,
       dateOfBirth: finalDob,
     };
-    if (!existing.mobile || String(existing.mobile).trim() === '') {
-      updatePayload.mobile = finalPhone;
-    }
     if (profileImage !== undefined) {
       updatePayload.profileImage = profileImage;
     }
