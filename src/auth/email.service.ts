@@ -12,10 +12,11 @@ export class EmailService {
   private readonly configuredPass: string;
 
   constructor(@Optional() private readonly configService?: ConfigService) {
-    this.configuredHost = this.getEnv('EMAIL_HOST') || 'smtp.gmail.com';
-    this.configuredPort = parseInt(this.getEnv('EMAIL_PORT') || '587', 10) || 587;
-    this.configuredUser = this.getEnv('EMAIL_USER');
-    this.configuredPass = this.getEnv('EMAIL_PASS');
+    this.configuredHost = this.getEnv('EMAIL_HOST') || this.getEnv('SMTP_HOST') || 'smtp.gmail.com';
+    this.configuredPort =
+      parseInt(this.getEnv('EMAIL_PORT') || this.getEnv('SMTP_PORT') || '587', 10) || 587;
+    this.configuredUser = this.getEnv('EMAIL_USER') || this.getEnv('SMTP_USER');
+    this.configuredPass = this.getEnv('EMAIL_PASS') || this.getEnv('SMTP_PASS');
 
     if (this.configuredUser && this.configuredPass) {
       this.transporter = this.buildSmtpTransporter(this.configuredPass);
@@ -42,14 +43,18 @@ export class EmailService {
   }
 
   private getFromAddress(displayName = 'VidyaLoan'): string {
-    const envFrom = this.getEnv('EMAIL_FROM');
+    let envFrom = this.getEnv('EMAIL_FROM') || this.getEnv('MAIL_FROM');
+    // Unwrap accidental surrounding quotes around "Name <email@domain>"
+    if (envFrom.startsWith('"') && envFrom.endsWith('"') && envFrom.includes('<') && envFrom.includes('>')) {
+      envFrom = envFrom.slice(1, -1).trim();
+    }
     if (envFrom && !envFrom.includes('[EMAIL_ADDRESS]')) {
       return envFrom;
     }
-    if (this.configuredUser) {
+    if (this.configuredUser && this.configuredUser.includes('@')) {
       return `"${displayName}" <${this.configuredUser}>`;
     }
-    return `"${displayName}" <noreply@vidyaloans.in>`;
+    return `"${displayName}" <support@vidyaloans.in>`;
   }
 
   static classifyError(err: unknown): string {
@@ -60,7 +65,14 @@ export class EmailService {
 
     if (msg.includes('not configured')) return 'EMAIL_NOT_CONFIGURED';
     if (msg.includes('resend api error')) return 'RESEND_API_ERROR';
-    if (code === 'EAUTH' || responseCode === 535 || msg.includes('username and password not accepted') || msg.includes('invalid login')) {
+    if (
+      responseCode === 554 ||
+      msg.includes('not verified') ||
+      msg.includes('identities failed')
+    ) {
+      return 'SES_IDENTITY_NOT_VERIFIED';
+    }
+    if (code === 'EAUTH' || responseCode === 535 || msg.includes('username and password not accepted') || msg.includes('invalid login') || msg.includes('authentication credentials invalid')) {
       return 'SMTP_AUTH_FAILED';
     }
     if (responseCode === 550 || responseCode === 553 || msg.includes('sender') || msg.includes('not owned')) {
@@ -143,8 +155,12 @@ export class EmailService {
       } catch (smtpError) {
         const errClass = EmailService.classifyError(smtpError);
 
-        // Retry with authenticated EMAIL_USER as From if custom EMAIL_FROM was rejected
-        if (errClass === 'SMTP_SENDER_REJECTED' && this.configuredUser) {
+        // Retry with authenticated EMAIL_USER as From only when EMAIL_USER is an email address
+        if (
+          errClass === 'SMTP_SENDER_REJECTED' &&
+          this.configuredUser &&
+          this.configuredUser.includes('@')
+        ) {
           const fallbackFrom = `"VidyaLoan" <${this.configuredUser}>`;
           if (mailOptions.from !== fallbackFrom) {
             try {

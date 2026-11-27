@@ -61,6 +61,39 @@ describe('Email OTP fixes', () => {
     expect((sendMailSpy.mock.calls[1][0] as any).from).toContain('support@vidyaloans.in');
   });
 
+  it('EmailService handles non-email IAM SMTP username (AWS SES) and classifies 554 unverified identity', async () => {
+    process.env.SMTP_HOST = 'email-smtp.ap-south-1.amazonaws.com';
+    process.env.SMTP_PORT = '587';
+    process.env.SMTP_USER = 'IAM_SMTP_USERNAME';
+    process.env.SMTP_PASS = 'smtp-secret';
+    process.env.MAIL_FROM = '"VidyaLoans <support@vidyaloans.in>"';
+    delete process.env.EMAIL_HOST;
+    delete process.env.EMAIL_USER;
+    delete process.env.EMAIL_PASS;
+    delete process.env.EMAIL_FROM;
+
+    const emailService = new EmailService();
+    const sendMailSpy = jest
+      .spyOn((emailService as any).transporter, 'sendMail')
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error('554 Message rejected: Email address is not verified.'),
+          { responseCode: 554 },
+        ),
+      );
+
+    await expect(emailService.sendOtp('sai@gmail.com', '654321')).rejects.toThrow(/not verified/);
+    expect(sendMailSpy).toHaveBeenCalledTimes(1);
+    expect((sendMailSpy.mock.calls[0][0] as any).from).toBe('VidyaLoans <support@vidyaloans.in>');
+    expect(
+      EmailService.classifyError(
+        Object.assign(new Error('554 Message rejected: Email address is not verified.'), {
+          responseCode: 554,
+        }),
+      ),
+    ).toBe('SES_IDENTITY_NOT_VERIFIED');
+  });
+
   it('AuthService.sendOtpUnified accepts <8 char usernames, suppresses raw otp leak, and returns failure when email fails', async () => {
     const usersService = {
       findOne: jest.fn().mockResolvedValue(null),
